@@ -1,3 +1,6 @@
+# Backup folders
+01*/
+
 # Python
 __pycache__/
 *.py[cod]
