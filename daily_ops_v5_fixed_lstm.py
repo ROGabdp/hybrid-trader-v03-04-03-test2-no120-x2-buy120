@@ -365,13 +365,26 @@ def feature_engineering_with_fixed_lstm(workspace: dict, end_date: str) -> tuple
 # =============================================================================
 # Step 3: V5 策略推論 (無濾網限制)
 # =============================================================================
-def v5_inference(workspace: dict, df: pd.DataFrame) -> dict:
+def v5_inference(workspace: dict, df: pd.DataFrame, open_positions: list = None, close_price: float = None) -> dict:
+    """
+    V5 策略推論
+    
+    Args:
+        workspace: 工作區資訊
+        df: 特徵 DataFrame
+        open_positions: 從回測讀取的 AI 持倉清單 (含 buy_price, buy_date)
+        close_price: 今日收盤價 (用於計算各持倉報酬率)
+    """
     print("\n" + "=" * 60)
     print("🎯 Step 3: V5 策略推論 (無濾網限制)")
     print("=" * 60)
     
     from stable_baselines3 import PPO
     latest = df.iloc[-1]
+    
+    # 如果沒傳入 close_price，從 df 取得
+    if close_price is None:
+        close_price = float(latest['Close'])
     
     # 保留 filter 資訊供參考，但不影響買入決策
     signal_buy_filter = bool(latest.get('Signal_Buy_Filter', False))
@@ -391,6 +404,7 @@ def v5_inference(workspace: dict, df: pd.DataFrame) -> dict:
         buy_agent = PPO.load(buy_path)
         sell_agent = PPO.load(sell_path)
         
+        # ===== Buy Agent =====
         b_act, _ = buy_agent.predict(features, deterministic=True)
         b_obs = buy_agent.policy.obs_to_tensor(features)[0]
         b_prob = buy_agent.policy.get_distribution(b_obs).distribution.probs.detach().cpu().numpy()[0]
@@ -403,11 +417,47 @@ def v5_inference(workspace: dict, df: pd.DataFrame) -> dict:
         filter_note = "✅通過" if signal_buy_filter else "❌未通過"
         print(f"  [V5] Buy: {buy_signal} ({buy_prob:.1%}) | 濾網: {filter_note}")
         
-        sell_scenarios = {}
-        for scenario_name, return_value in {'cost': 1.00, 'profit': 1.10, 'loss': 0.95}.items():
-            s_feat = np.concatenate([features[0], [return_value]]).reshape(1, -1)
-            s_act, _ = sell_agent.predict(s_feat, deterministic=True)
-            sell_scenarios[scenario_name] = 'SELL' if s_act[0] == 1 else 'HOLD'
+        # ===== Sell Agent (真實持倉分析) =====
+        position_decisions = []
+        
+        if open_positions and len(open_positions) > 0:
+            print(f"  [V5] 分析 {len(open_positions)} 筆 AI 持倉...")
+            
+            for pos in open_positions:
+                buy_price = float(pos.get('buy_price', 0))
+                buy_date = pos.get('buy_date', 'N/A')
+                
+                if buy_price > 0:
+                    # 計算真實報酬率
+                    current_return = close_price / buy_price
+                    return_pct = (current_return - 1) * 100
+                    
+                    # 構建 Sell Agent 的觀察值 (特徵 + 報酬率)
+                    s_feat = np.concatenate([features[0], [current_return]]).reshape(1, -1).astype(np.float32)
+                    s_act, _ = sell_agent.predict(s_feat, deterministic=True)
+                    
+                    # 取得機率分布以計算信心
+                    s_obs = sell_agent.policy.obs_to_tensor(s_feat)[0]
+                    s_prob = sell_agent.policy.get_distribution(s_obs).distribution.probs.detach().cpu().numpy()[0]
+                    
+                    sell_action = 'SELL' if s_act[0] == 1 else 'HOLD'
+                    sell_conf = float(s_prob[1]) if s_act[0] == 1 else float(s_prob[0])
+                    
+                    # 判斷是否觸發停損 (硬性規則: -8%)
+                    triggered_stop_loss = current_return < 0.92
+                    
+                    position_decisions.append({
+                        'buy_date': buy_date,
+                        'buy_price': buy_price,
+                        'current_return': current_return,
+                        'return_pct': return_pct,
+                        'action': sell_action,
+                        'confidence': sell_conf,
+                        'triggered_stop_loss': triggered_stop_loss,
+                        'final_action': 'SELL' if triggered_stop_loss else sell_action
+                    })
+        else:
+            print(f"  [V5] 無 AI 持倉，跳過 Sell Agent 分析")
         
         return {
             'filter_signal': signal_buy_filter,
@@ -415,7 +465,7 @@ def v5_inference(workspace: dict, df: pd.DataFrame) -> dict:
             'buy_confidence': buy_prob * 100,
             'buy_action': int(b_act[0]),
             'ai_action': ai_action,
-            'sell_scenarios': sell_scenarios
+            'position_decisions': position_decisions  # 新增：每筆持倉的 Sell Agent 判斷
         }
     except Exception as e:
         print(f"  [Error] V5 Inference: {e}")
@@ -512,11 +562,6 @@ def generate_report(workspace: dict, df: pd.DataFrame, res: dict, date_str: str,
         buy_icon = "🚀" if ai_action == 'BUY' else "💤" if ai_action == 'WAIT' else "🚫"
         
         lines.append(f"   🛒 買入訊號: {buy_icon} {buy_signal} ({buy_prob:.1%})")
-        ss = res.get('sell_scenarios', {})
-        lines.append(f"   📦 賣出建議:")
-        lines.append(f"      ├─ 成本區 (0%):  {ss.get('cost', 'N/A')}")
-        lines.append(f"      ├─ 獲利中 (+10%): {ss.get('profit', 'N/A')}")
-        lines.append(f"      └─ 虧損中 (-5%):  {ss.get('loss', 'N/A')}")
 
     lines.append("-" * 50)
     
@@ -569,50 +614,41 @@ def generate_report(workspace: dict, df: pd.DataFrame, res: dict, date_str: str,
         else:
             lines.append(f"   ⚪ 買入預測: 無 (AI:{ai_action})")
         
-        # 預測賣出
-        open_positions = backtest_status.get('open_positions', [])
+        # 預測賣出 (使用 position_decisions)
+        position_decisions = res.get('position_decisions', [])
         predicted_sell = 0
         
-        if open_positions:
+        if position_decisions:
             lines.append("-" * 50)
-            lines.append("📦 [AI持倉明細] (基於回測記錄)")
+            lines.append("📦 [AI持倉明細 + Sell Agent 判斷]")
             
-            for i, pos in enumerate(open_positions, 1):
-                buy_price = float(pos.get('buy_price', 0))
-                buy_date = pos.get('buy_date', 'N/A')
+            for i, pd in enumerate(position_decisions, 1):
+                buy_date = pd.get('buy_date', 'N/A')
+                buy_price = pd.get('buy_price', 0)
+                return_pct = pd.get('return_pct', 0)
+                action = pd.get('action', 'HOLD')
+                confidence = pd.get('confidence', 0)
+                final_action = pd.get('final_action', 'HOLD')
+                triggered_stop_loss = pd.get('triggered_stop_loss', False)
                 
-                if buy_price > 0:
-                    current_return = (close_price / buy_price)
-                    return_pct = (current_return - 1) * 100
-                    
-                    # 判斷此持倉是否會被賣出
-                    will_sell = False
-                    sell_reason = ""
-                    
-                    if current_return < 0.92:  # 虧損 > 8%
-                        will_sell = True
-                        sell_reason = "停損 (<-8%)"
-                    elif current_return >= 1.10:  # 獲利 >= 10%
-                        ss = res.get('sell_scenarios', {})
-                        if ss.get('profit', 'HOLD') == 'SELL':
-                            will_sell = True
-                            sell_reason = "獲利了結"
-                    
-                    status_icon = "🔴 SELL" if will_sell else "🟢 HOLD"
-                    lines.append(f"   #{i} 買入: {buy_date} @ {buy_price:,.2f}")
-                    lines.append(f"       現價: {close_price:,.2f} | 報酬: {return_pct:+.2f}% | {status_icon} {sell_reason}")
-                    
-                    if will_sell:
-                        predicted_sell += 1
+                # 決定顯示格式
+                if triggered_stop_loss:
+                    status_icon = "🔴 SELL"
+                    reason = f"停損觸發 (AI: {action} {confidence:.1%})"
+                elif final_action == 'SELL':
+                    status_icon = "🔴 SELL"
+                    reason = f"AI決定 ({confidence:.1%})"
+                else:
+                    status_icon = "🟢 HOLD"
+                    reason = f"AI決定 ({confidence:.1%})"
+                
+                lines.append(f"   #{i} 買入: {buy_date} @ {buy_price:,.2f}")
+                lines.append(f"       報酬: {return_pct:+.2f}% | {status_icon} {reason}")
+                
+                if final_action == 'SELL':
+                    predicted_sell += 1
         elif ai_positions > 0:
-            lines.append(f"   ⚠️ 無持倉明細資料，使用假設情境判斷:")
-            ss = res.get('sell_scenarios', {})
-            sell_decision = ss.get('cost', 'HOLD')
-            if sell_decision == 'SELL':
-                predicted_sell = ai_positions
-                lines.append(f"   🔴 賣出預測: AI-{ai_positions}倉 (Sell Agent 建議 SELL)")
-            else:
-                lines.append(f"   ⚪ 賣出預測: 無 (Sell Agent 建議 {sell_decision})")
+            lines.append(f"   ⚠️ 無持倉明細資料")
         else:
             lines.append(f"   ⚪ 賣出預測: 無 (AI 無持倉)")
         
@@ -735,8 +771,10 @@ def main():
         print(f"[Warning] 預估日期 {date_str} 與實際資料日期 {actual_date} 不同")
         print(f"[Info] 報告將使用實際資料日期: {actual_date}")
     
-    # Step 3: V5 策略推論
-    res = v5_inference(ws, df)
+    # Step 3: V5 策略推論 (傳入真實持倉資訊)
+    open_positions = backtest_status.get('open_positions', []) if backtest_status else []
+    close_price = float(df.iloc[-1]['Close'])
+    res = v5_inference(ws, df, open_positions=open_positions, close_price=close_price)
     
     # Step 4: 輸出報告
     generate_report(ws, df, res, actual_date, backtest_status)

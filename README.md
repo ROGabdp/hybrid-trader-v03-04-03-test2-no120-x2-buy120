@@ -66,6 +66,16 @@ V5模型:
     盤中
     daily_ops_v5_intraday_fixed_lstm.py -i
 
+修改以下腳本:
+    daily_ops_v5_fixed_lstm.py：
+        -v5_inference()新增 open_positions 和 close_price 參數
+        -針對每筆真實持倉計算報酬率並取得 Sell Agent 決策與信心
+        -報告中移除「假設情境」，改為顯示每筆持倉的 AI 判斷
+    daily_ops_v5_intraday_fixed_lstm.py：
+        -与上述相同的修改
+    evaluate_sell_agent_performance.py(新檔案)：
+        -   讀取 trades_strat2_*.csv 並計算 Sell Agent 的勝率、獲利因子、停損比例等指標
+
 
 # v03-04-03-test2-no120-x2 重點
 
