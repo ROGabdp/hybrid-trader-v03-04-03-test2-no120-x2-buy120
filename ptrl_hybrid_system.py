@@ -653,6 +653,59 @@ class BuyEnvHybrid(gym.Env):
         return self.current_sample[0], reward, True, False, {}
 
 
+class BuyEnvHybridV5(gym.Env):
+    """Buy RL Environment V5 - 對稱獎勵結構
+    
+    獎勵設計：
+    - 買對 (action=1, 漲幅≥10%): +1.0
+    - 買錯 (action=1, 漲幅<10%): 0.0
+    - 錯過好機會 (action=0, 漲幅≥10%): 0.0
+    - 正確迴避 (action=0, 漲幅<10%): +1.0
+    """
+    def __init__(self, data_dict, is_training=True):
+        super().__init__()
+        self.samples, self.pos_samples, self.neg_samples = [], [], []
+        
+        for t, df in data_dict.items():
+            df = df.dropna(subset=['Next_120d_Max'])
+            signals = df  # 無唐其安通道限制
+            if len(signals) > 0:
+                states = signals[FEATURE_COLS].values.astype(np.float32)
+                future_rets = signals['Next_120d_Max'].values.astype(np.float32)
+                for i in range(len(signals)):
+                    sample = (states[i], future_rets[i])
+                    self.samples.append(sample)
+                    (self.pos_samples if future_rets[i] >= 0.10 else self.neg_samples).append(sample)
+        
+        print(f"[BuyEnvV5] Total samples: {len(self.samples)} | Pos (≥10%): {len(self.pos_samples)} | Neg: {len(self.neg_samples)}")
+        
+        self.action_space = spaces.Discrete(2)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(len(FEATURE_COLS),), dtype=np.float32)
+        self.is_training = is_training
+        self.idx, self.current_sample = 0, None
+    
+    def reset(self, seed=None, options=None):
+        # 類別平衡 50/50
+        if np.random.rand() < 0.5 and self.pos_samples:
+            self.current_sample = self.pos_samples[np.random.randint(len(self.pos_samples))]
+        elif self.neg_samples:
+            self.current_sample = self.neg_samples[np.random.randint(len(self.neg_samples))]
+        else:
+            self.current_sample = self.samples[np.random.randint(len(self.samples))]
+        return self.current_sample[0], {}
+    
+    def step(self, action):
+        _, max_ret = self.current_sample
+        is_success = max_ret >= 0.10  # 未來 120 天最大漲幅 >= 10%
+        
+        # V5 對稱獎勵結構
+        if action == 1:  # 選擇買入
+            reward = 1.0 if is_success else 0.0
+        else:  # 選擇不買
+            reward = 0.0 if is_success else 1.0
+        
+        return self.current_sample[0], reward, True, False, {}
+
 class SellEnvHybrid(gym.Env):
     """Sell RL Environment"""
     def __init__(self, data_dict):
