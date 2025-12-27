@@ -1,0 +1,24 @@
+{
+  "train_end_date": "2022-12-31",
+  "created_at": "2025-12-27T13:49:18.414891",
+  "models": {
+    "model_1d": {
+      "path": "D:\\000-github-repositories\\hybrid-trader-v03-04-03-test2-no120-x2-buy120\\saved_models_multivariate\\model_2017-07-10_2022-12-31_fixed.keras",
+      "basename": "model_2017-07-10_2022-12-31_fixed.keras",
+      "start_date": "2017-07-10",
+      "end_date": "2022-12-31"
+    },
+    "model_5d": {
+      "path": "D:\\000-github-repositories\\hybrid-trader-v03-04-03-test2-no120-x2-buy120\\saved_models_5d\\model_2016-12-22_2022-12-31_fixed.keras",
+      "basename": "model_2016-12-22_2022-12-31_fixed.keras",
+      "start_date": "2016-12-22",
+      "end_date": "2022-12-31"
+    },
+    "model_20d": {
+      "path": "D:\\000-github-repositories\\hybrid-trader-v03-04-03-test2-no120-x2-buy120\\saved_models_20d\\model_2016-06-05_2022-12-31_fixed.keras",
+      "basename": "model_2016-06-05_2022-12-31_fixed.keras",
+      "start_date": "2016-06-05",
+      "end_date": "2022-12-31"
+    }
+  }
+}
