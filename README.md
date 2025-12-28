@@ -57,14 +57,14 @@ V5模型:
     結論：
     對稱獎勵結構讓 Agent 學會了更謹慎的決策！它不再盲目買入，而是會在低信心度時選擇「不買」，這使得當它決定買入時，成功率更高。
 
-    針對v5模型，建立了回測腳本和每日運營腳本:
+針對v5模型，建立了回測腳本和每日運營腳本:
 
-    backtest_v5_no_filter.py
+    python backtest_v5_no_filter.py
     盤後
-    backtest_v5_dca_hybrid_no_filter_fixed_lstm.py --start 2025-12-09
-    daily_ops_v5_fixed_lstm.py
+    python backtest_v5_dca_hybrid_no_filter_fixed_lstm.py --start 2025-12-09
+    python daily_ops_v5_fixed_lstm.py
     盤中
-    daily_ops_v5_intraday_fixed_lstm.py -i
+    python daily_ops_v5_intraday_fixed_lstm.py -i
 
 修改以下腳本:
     daily_ops_v5_fixed_lstm.py：
@@ -75,6 +75,26 @@ V5模型:
         -与上述相同的修改
     evaluate_sell_agent_performance.py(新檔案)：
         -   讀取 trades_strat2_*.csv 並計算 Sell Agent 的勝率、獲利因子、停損比例等指標
+
+# 全面更新 backtest_v5_dca_hybrid_dynamic_filter_fixed_lstm.py，現在它：
+
+-輸出格式完全對齊基準腳本：產生與 no_filter 版本相同的所有 CSV 和 PNG 輸出。
+-包含 Strategy 1 (2x Leverage) 和 Strategy 2 (Shared Pool)：兩個策略都加入了動態濾網邏輯。
+-動態濾網邏輯：
+    - 熊市判定：Price < MA120 連續 3 天
+    - 熊市時啟用 10 日 Donchian Filter
+    - 牛市時無濾網限制
+
+-關於 ptrl_hybrid_system.py 的 MA120 改動：
+    - ✅ 已確認安全：MA120 未加入 FEATURE_COLS，不會影響模型訓練或其他回測腳本。
+
+# 針對v5模型，搭配了牛熊MA120濾網，建立了回測腳本和每日運營腳本:
+
+    * 盤後
+    python backtest_v5_dca_hybrid_dynamic_filter_fixed_lstm.py --start 2025-12-09
+    python daily_ops_v5_dynamic_filter_fixed_lstm.py   
+    * 盤中
+    python daily_ops_v5_intraday_dynamic_filter_fixed_lstm.py -i
 
 
 # v03-04-03-test2-no120-x2 重點

@@ -511,6 +511,7 @@ def calculate_features(df_in: pd.DataFrame, benchmark_df: pd.DataFrame,
     # 確保成交量分母不為 0
     df['MA20'] = df['Close'].rolling(20).mean()
     df['MA60'] = df['Close'].rolling(60).mean()
+    df['MA120'] = df['Close'].rolling(120).mean()
     df['MA240'] = df['Close'].rolling(240).mean()
     df['MA_Vol_20'] = df['Volume'].rolling(20).mean()
     
